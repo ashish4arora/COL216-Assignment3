@@ -26,15 +26,12 @@ public:
         sets.resize(numSets, vector<Block>(assoc));
     }
 
-    bool access(unsigned long addr, bool isWrite) {
+    bool access(unsigned long addr) {
         unsigned long index = (addr / blockSize) % numSets;
         unsigned long tag = addr / (blockSize * numSets);
 
         for (int i = 0; i < assoc; ++i) {
-            if (sets[index][i].tag == tag) {
-                if (isWrite) {
-                    sets[index][i].dirty = true;
-                }
+            if (sets[index][i].tag == tag && sets[index][i].valid) {
                 updateLRU(index, i);
                 return true;
             }
@@ -48,9 +45,45 @@ public:
         unsigned long tag = addr / (blockSize * numSets);
 
         for (int i = 0; i < assoc; ++i) {
-            if (sets[index][i].tag == tag) {
+            if (sets[index][i].tag == tag && sets[index][i].valid) {
                 sets[index][i].dirty = true;
                 return;
+            }
+        }
+    }
+
+    // unsigned long getOld(unsigned long addr, bool isWrite) {
+    //     unsigned long index = (addr / blockSize) % numSets;
+    //     unsigned long tag = addr / (blockSize * numSets);
+
+    //     if (isWrite){
+    //         // if write, get the lru to where we want to write and return its old address
+    //         int lru = getLRU(index);
+    //         return sets[index][lru].tag * (blockSize * numSets) + index * blockSize;
+    //     }else{
+    //         // if read, check all blocks in the set for the tag and return its old address
+    //         for (int i = 0; i < assoc; ++i) {
+    //             if (sets[index][i].tag == tag && sets[index][i].valid) {
+    //                 return sets[index][i].tag * (blockSize * numSets) + index * blockSize;
+    //             }
+    //         }
+    //     }
+    // }
+
+    bool checkDirty(unsigned long addr, bool isWrite) {
+        unsigned long index = (addr / blockSize) % numSets;
+        unsigned long tag = addr / (blockSize * numSets);  
+    
+        if (isWrite){
+            // if write, get the lru to where we want to write and return its dirty bit
+            int lru = getLRU(index);
+            return sets[index][lru].dirty;
+        }else{
+            // if read, check all blocks in the set for the tag and return its dirty bit
+            for (int i = 0; i < assoc; ++i) {
+                if (sets[index][i].tag == tag && sets[index][i].valid) {
+                    return sets[index][i].dirty;
+                }
             }
         }
     }
@@ -62,7 +95,7 @@ public:
 
         evicted = sets[index][lru].valid;
         dirty = sets[index][lru].dirty;
-        oldAddr = sets[index][lru].tag * (blockSize * numSets) + index * blockSize;
+        oldAddr = sets[index][lru].tag * (blockSize * numSets);
         sets[index][lru].tag = tag;
         sets[index][lru].dirty = isWrite;
         sets[index][lru].valid = true;
@@ -94,10 +127,11 @@ private:
         int lru_index = 0;
 
         for (int i = 0; i < assoc; ++i) {
-            if (sets[index][i].valid == false) {
-                return i;
-            }
             if (sets[index][i].lru_count > max_lru) {
+                //If empty block is found, return it
+                // if (sets[index][i].valid == false){
+                //     return i;
+                // }
                 max_lru = sets[index][i].lru_count;
                 lru_index = i;
             }
@@ -140,7 +174,7 @@ int main(int argc, char *argv[]) {
 
     while (trace >> op >> hex >> addr) {
         bool isWrite = (op == 'w');
-        bool l1_hit = l1.access(addr, isWrite);
+        bool l1_hit = l1.access(addr);
 
         if (l1_hit) {
             // if write then update dirty bit, increment write and read counts regardless
@@ -152,17 +186,6 @@ int main(int argc, char *argv[]) {
             }
             total_time += 1; // L1 hit
         } else {
-            bool l2_hit = l2.access(addr, isWrite);
-            // add time due to miss, update l2 misses count
-
-            if (l2_hit) {
-                total_time += 20; // L2 hit
-            } else {
-                total_time += 20;
-                total_time += 200; // DRAM access
-                l2_read_misses++;
-            }
-
             // update l1 misses count
             if (isWrite) {
                 l1_write_misses++;
@@ -170,50 +193,71 @@ int main(int argc, char *argv[]) {
                 l1_read_misses++;
             }
 
+            // write in l1, this step occurs later but we need to know if we need to write back and order here wont matter
             bool evicted, dirty;
             unsigned long oldAddr;
-            // evicted is true when a block is there
             l1.insert(addr, isWrite, evicted, dirty, oldAddr);
+            // if we had a write due then set dirty to 1
+            if (isWrite) {
+                l1.setDirty(addr);
+            }
 
-            // if dirty and a block was present in l1, write it back to l2
-            // it's not necessary for this block to be present in l2, incase assoc of l2 is lower?
+            // if it's a dirty bit then write it before doing anything else
             if (evicted && dirty) {
-                l1_writebacks++; //increment l1 writebacks regardless 
-                bool l2_hit_old = l2.access(oldAddr, true); //check if block is present in l2
-                if (l2_hit_old){
-                    total_time += 20;
+                l1_writebacks++;
+                // do we add time for this?
+                // get the address for which write back is due
+                bool inL2 = l2.access(oldAddr);
+                if (inL2) {
+                    // in L2, update its value
                     l2_writes ++;
-                    l2.setDirty(oldAddr); //if yes then just set its dirty bit to 1
+                    total_time += 20; // L2 access
+                    l2.setDirty(oldAddr); // set dirty bit since l1 writeback to it happens in l2
                 } else {
-                    total_time += 20;
-                    total_time += 200;
-                    l2_write_misses ++;
-                    bool evicted_old, dirty_old, oldAddr_old;
-                    l2.insert(oldAddr, true, evicted_old, dirty_old, oldAddr_old); //otherwise get that block from DRAM
+                    // not in L2, get it from memory
                     l2_writes ++;
-                    if (evicted_old && dirty_old) {
-                        l2_writebacks++; //if the block at position of oldAddr in l2 is dirty then write it back to DRAM
+                    l2_write_misses ++;
+                    total_time += 20; // L2 access
+                    total_time += 200; // get block from DRAM
+                    bool evicted, dirty;
+                    unsigned long olderAddr;
+                    l2.insert(oldAddr, true, evicted, dirty, olderAddr);
+                    if (evicted && dirty) {
+                        l2_writebacks++;
+                        total_time += 200; // write block currently in that location to DRAM
                     }
                 }
             }
 
-            if (!l2_hit) {
-                l2.insert(addr, isWrite, evicted, dirty, oldAddr);
-                
-                // if dirty and a block was present in l2, write it back to DRAM
-                // since we are directly writing to DRAM in this case we dont need to check whether oldAddr is present or not in the lower level
-                if (evicted && dirty) {
-                    l2_writebacks++;
+            // check if the new block req is in l2
+            bool l2_hit = l2.access(addr);
+
+            // add time due to miss, update l2 misses count
+            if (l2_hit) {
+                l2_reads ++;
+                total_time += 20; // L2 access
+                // continue; //if found in l2 skip rest of the iteration
+            } else {
+                l2_reads ++;
+                total_time += 20; // L2 access
+                total_time += 200; // DRAM access
+                l2_read_misses++; // since not in L2
+
+                // block not in memory so get it from memory and insert in l2
+                bool evicted, dirty;
+                unsigned long oldAddr;
+                l2.insert(addr, false, evicted, dirty, oldAddr);
+                if (evicted && dirty) { // if some value already present in that location
+                    l2_writebacks++; // write it back to dram
+                    total_time += 200; // write block currently in that location to DRAM
                 }
             }
 
             // increment writes and reads of both l1 and l2
             if (isWrite) {
                 l1_writes++;
-                l2_reads++;
             } else {
                 l1_reads++;
-                l2_reads++;
             }
         }
     }
