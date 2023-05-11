@@ -28,7 +28,7 @@ public:
 
     bool access(unsigned long addr) {
         unsigned long index = (addr / blockSize) % numSets;
-        unsigned long tag = addr / (blockSize * numSets);
+        unsigned long tag = addr / (blockSize);
 
         for (int i = 0; i < assoc; ++i) {
             if (sets[index][i].tag == tag && sets[index][i].valid) {
@@ -42,11 +42,12 @@ public:
 
     void setDirty(unsigned long addr) {
         unsigned long index = (addr / blockSize) % numSets;
-        unsigned long tag = addr / (blockSize * numSets);
+        unsigned long tag = addr / (blockSize);
 
         for (int i = 0; i < assoc; ++i) {
             if (sets[index][i].tag == tag && sets[index][i].valid) {
                 sets[index][i].dirty = true;
+                // cout << "addr: " << addr << " is set dirty" << endl;
                 return;
             }
         }
@@ -72,7 +73,7 @@ public:
 
     bool checkDirty(unsigned long addr, bool isWrite) {
         unsigned long index = (addr / blockSize) % numSets;
-        unsigned long tag = addr / (blockSize * numSets);  
+        unsigned long tag = addr / (blockSize);  
     
         if (isWrite){
             // if write, get the lru to where we want to write and return its dirty bit
@@ -88,17 +89,17 @@ public:
         }
     }
 
-    bool insert(unsigned long addr, bool isWrite, bool &evicted, bool &dirty, unsigned long oldAddr) {
+    bool insert(unsigned long addr, bool isWrite, bool &evicted, bool &dirty, unsigned long &oldAddr) {
         unsigned long index = (addr / blockSize) % numSets;
-        unsigned long tag = addr / (blockSize * numSets);
+        unsigned long tag = addr / (blockSize);
         int lru = getLRU(index);
-
         evicted = sets[index][lru].valid;
         dirty = sets[index][lru].dirty;
-        oldAddr = sets[index][lru].tag * (blockSize * numSets);
+        oldAddr = sets[index][lru].tag * (blockSize);
         sets[index][lru].tag = tag;
         sets[index][lru].dirty = isWrite;
         sets[index][lru].valid = true;
+        // cout << "addr: " << addr << "index: " << index  << "oldAddr: " << oldAddr<< endl;
 
         updateLRU(index, lru);
 
@@ -197,6 +198,7 @@ int main(int argc, char *argv[]) {
             bool evicted, dirty;
             unsigned long oldAddr;
             l1.insert(addr, isWrite, evicted, dirty, oldAddr);
+            // cout << "l1 insert: " << "oldAddr: " << oldAddr << "dirty: " << dirty << "evicted: " << evicted << endl;
             // if we had a write due then set dirty to 1
             if (isWrite) {
                 l1.setDirty(addr);
@@ -221,6 +223,7 @@ int main(int argc, char *argv[]) {
                     total_time += 200; // get block from DRAM
                     bool evicted, dirty;
                     unsigned long olderAddr;
+                    cout << "oldAddr: " << oldAddr << endl;
                     l2.insert(oldAddr, true, evicted, dirty, olderAddr);
                     if (evicted && dirty) {
                         l2_writebacks++;
@@ -277,6 +280,5 @@ int main(int argc, char *argv[]) {
     cout << "L2 miss rate: " << fixed << setprecision(2) << (double)(l2_read_misses + l2_write_misses) / (l2_reads + l2_writes) * 100 << "%" << endl;
     cout << "number of writebacks from L2 memory: " << l2_writebacks << endl;
     cout << "total access time: " << total_time << " ns" << endl;
-
     return 0;
 }
