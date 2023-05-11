@@ -268,7 +268,7 @@ int main(int argc, char *argv[]) {
     }
 
     trace.close();
-
+    cout << "\n\n===== Simulation Results =====" << endl;
     cout << "number of L1 reads: " << l1_reads << endl;
     cout << "number of L1 read misses: " << l1_read_misses << endl;
     cout << "number of L1 writes: " << l1_writes << endl;
