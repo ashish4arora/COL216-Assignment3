@@ -259,8 +259,10 @@ int main(int argc, char *argv[]) {
             // increment writes and reads of both l1 and l2
             if (isWrite) {
                 l1_writes++;
+                total_time += 1; // L1 hit
             } else {
                 l1_reads++;
+                total_time += 1; // L1 hit
             }
         }
     }
