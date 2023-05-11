@@ -7,10 +7,7 @@ L2_SIZE=65536
 L2_ASSOC=8
 TRACE_FILE=memory_trace_files/trace2.txt
 
-all: clean compile run
-
-clean:
-	rm -f $(OUT)
+all: compile run
 
 compile: $(CC) 
 	g++ -o $(OUT) $(CC)
