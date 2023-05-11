@@ -223,7 +223,7 @@ int main(int argc, char *argv[]) {
                     total_time += 200; // get block from DRAM
                     bool evicted, dirty;
                     unsigned long olderAddr;
-                    cout << "oldAddr: " << oldAddr << endl;
+                    // cout << "oldAddr: " << oldAddr << endl;
                     l2.insert(oldAddr, true, evicted, dirty, olderAddr);
                     if (evicted && dirty) {
                         l2_writebacks++;
