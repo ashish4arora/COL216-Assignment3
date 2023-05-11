@@ -1,11 +1,11 @@
-CC=ass3.cpp
+CC=ass3_inclusive.cpp
 OUT=cache_simulate
 BLOCKSIZE=64
 L1_SIZE=1024
 L1_ASSOC=2
 L2_SIZE=65536
 L2_ASSOC=8
-TRACE_FILE=memory_trace_files/trace2.txt
+TRACE_FILE=memory_trace_files/trace8.txt
 
 all: compile run
 

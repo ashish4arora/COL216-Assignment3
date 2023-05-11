@@ -40,6 +40,20 @@ public:
         return false;
     }
 
+    bool accessWithoutLRU(unsigned long addr) {
+    unsigned long index = (addr / blockSize) % numSets;
+    unsigned long tag = addr / (blockSize);
+
+    for (int i = 0; i < assoc; ++i) {
+        if (sets[index][i].tag == tag && sets[index][i].valid) {
+            // updateLRU(index, i);
+            return true;
+        }
+    }
+
+    return false;
+    }
+
     void setDirty(unsigned long addr) {
         unsigned long index = (addr / blockSize) % numSets;
         unsigned long tag = addr / (blockSize);
@@ -47,6 +61,28 @@ public:
         for (int i = 0; i < assoc; ++i) {
             if (sets[index][i].tag == tag && sets[index][i].valid) {
                 sets[index][i].dirty = true;
+                // cout << "addr: " << addr << " is set dirty" << endl;
+                return;
+            }
+        }
+    }
+
+    unsigned long getOld(unsigned long addr) {
+        unsigned long index = (addr / blockSize) % numSets;
+        unsigned long tag = addr / (blockSize);  
+
+        int lru = getLRU(index);
+        return sets[index][lru].tag * (blockSize);
+
+    }
+
+    void invalidate(unsigned long addr) {
+        unsigned long index = (addr / blockSize) % numSets;
+        unsigned long tag = addr / (blockSize);
+
+        for (int i = 0; i < assoc; ++i) {
+            if (sets[index][i].tag == tag && sets[index][i].valid) {
+                sets[index][i].valid = false;
                 // cout << "addr: " << addr << " is set dirty" << endl;
                 return;
             }
@@ -71,22 +107,13 @@ public:
     //     }
     // }
 
-    bool checkDirty(unsigned long addr, bool isWrite) {
+    bool checkDirty(unsigned long addr) {
         unsigned long index = (addr / blockSize) % numSets;
         unsigned long tag = addr / (blockSize);  
-    
-        if (isWrite){
-            // if write, get the lru to where we want to write and return its dirty bit
-            int lru = getLRU(index);
-            return sets[index][lru].dirty;
-        }else{
-            // if read, check all blocks in the set for the tag and return its dirty bit
-            for (int i = 0; i < assoc; ++i) {
-                if (sets[index][i].tag == tag && sets[index][i].valid) {
-                    return sets[index][i].dirty;
-                }
-            }
-        }
+
+        int lru = getLRU(index);
+        return sets[index][lru].dirty && sets[index][lru].valid;
+
     }
 
     bool insert(unsigned long addr, bool isWrite, bool &evicted, bool &dirty, unsigned long &oldAddr) {
@@ -194,42 +221,15 @@ int main(int argc, char *argv[]) {
                 l1_read_misses++;
             }
 
-            // write in l1, this step occurs later but we need to know if we need to write back and order here wont matter
-            bool evicted, dirty;
-            unsigned long oldAddr;
-            l1.insert(addr, isWrite, evicted, dirty, oldAddr);
-            // cout << "l1 insert: " << "oldAddr: " << oldAddr << "dirty: " << dirty << "evicted: " << evicted << endl;
-            // if we had a write due then set dirty to 1
-            if (isWrite) {
-                l1.setDirty(addr);
-            }
-
             // if it's a dirty bit then write it before doing anything else
-            if (evicted && dirty) {
+            if (l1.checkDirty(addr)) {
                 l1_writebacks++;
                 // do we add time for this?
                 // get the address for which write back is due
-                bool inL2 = l2.access(oldAddr);
-                if (inL2) {
                     // in L2, update its value
-                    l2_writes ++;
-                    total_time += 20; // L2 access
-                    l2.setDirty(oldAddr); // set dirty bit since l1 writeback to it happens in l2
-                } else {
-                    // not in L2, get it from memory
-                    l2_writes ++;
-                    l2_write_misses ++;
-                    total_time += 20; // L2 access
-                    total_time += 200; // get block from DRAM
-                    bool evicted, dirty;
-                    unsigned long olderAddr;
-                    cout << "oldAddr: " << oldAddr << endl;
-                    l2.insert(oldAddr, true, evicted, dirty, olderAddr);
-                    if (evicted && dirty) {
-                        l2_writebacks++;
-                        total_time += 200; // write block currently in that location to DRAM
-                    }
-                }
+                l2_writes ++;
+                total_time += 20; // L2 access
+                l2.setDirty(l1.getOld(addr)); // set dirty bit since l1 writeback to it happens in l2
             }
 
             // check if the new block req is in l2
@@ -251,9 +251,24 @@ int main(int argc, char *argv[]) {
                 unsigned long oldAddr;
                 l2.insert(addr, false, evicted, dirty, oldAddr);
                 if (evicted && dirty) { // if some value already present in that location
+                    bool inL1 = l1.accessWithoutLRU(oldAddr); // check if it's in l1
+                    if (inL1){
+                        if (l1.checkDirty(oldAddr)){ // if it's dirty then write it back to l2
+                            l1_writebacks++;
+                            l2_writes++;
+                            total_time += 20; // L2 write
+                        }
+                        l1.invalidate(oldAddr); // invalidate it in l1
+                    }
                     l2_writebacks++; // write it back to dram
                     total_time += 200; // write block currently in that location to DRAM
                 }
+            }
+            bool evicted, dirty;
+            unsigned long oldAddr;
+            l1.insert(addr, isWrite, evicted, dirty, oldAddr);
+            if (isWrite) {
+                l1.setDirty(addr);
             }
 
             // increment writes and reads of both l1 and l2
